@@ -132,45 +132,59 @@ void RoundaboutHandler::invalidateExitAgainstDirection(const NodeID from_nid,
     // *     | \░        | \          |    *
     // * <--'   \    <--'   v     <--'     *
     // *************************************
-    bool roundabout_entry_first = false;
-    auto invalidate_from = intersection.end(), invalidate_to = intersection.end();
-    for (auto road = intersection.begin(); road != intersection.end(); ++road)
+    const auto size = intersection.size();
+    auto intersection_entry = size, intersection_exit = size, road = size;
+    for (std::size_t index = 0; index < size; ++index)
     {
-        const auto &edge_data = node_based_graph.GetEdgeData(road->eid);
+        const auto &edge_data = node_based_graph.GetEdgeData(intersection[index].eid);
         if (edge_data.roundabout || edge_data.circular)
         {
             if (edge_data.reversed)
-            {
-                if (roundabout_entry_first)
-                { // invalidate turns in range exit..end
-                    invalidate_from = road + 1;
-                    invalidate_to = intersection.end();
-                }
-                else
-                { // invalidate turns in range begin..exit
-                    invalidate_from = intersection.begin() + 1;
-                    invalidate_to = road;
-                }
-            }
+                intersection_exit = index;
             else
-            {
-                roundabout_entry_first = true;
-            }
+                intersection_entry = index;
+        }
+        else if (road == size || intersection[road].angle == intersection[index].angle)
+        {
+            road = index;
         }
     }
 
-    OSRM_ASSERT(invalidate_from <= invalidate_to, coordinates[from_nid]);
+    OSRM_ASSERT(road != size, coordinates[from_nid]);
+    OSRM_ASSERT(intersection_entry != size, coordinates[from_nid]);
+    OSRM_ASSERT(intersection_exit != size, coordinates[from_nid]);
+    if (road == size || intersection_entry == size || intersection_exit == size)
+    { // ignore wrong intersections
+        return;
+    }
+
+    // indices shift to have road index at 0 by modulo size
+    const auto shift = size - road;
+    OSRM_ASSERT(shift <= size, coordinates[from_nid]);
+
+    std::size_t invalidate_from, invalidate_to;
+    if ((intersection_entry + shift) % size < (intersection_exit + shift) % size)
+    { // road .... entry .... exit ░░░░
+        invalidate_from = (intersection_exit + 1 + shift) % size;
+        invalidate_to = 0;
+    }
+    else
+    { // road ░░░░ exit .... entry ....
+        invalidate_from = 1;
+        invalidate_to = (intersection_exit + shift) % size;
+    }
 
     // Exiting roundabouts at an entry point is technically a data-modelling issue.
     // This workaround handles cases in which an exit precedes and entry. The resulting
     // u-turn against the roundabout direction is invalidated.
-    for (; invalidate_from != invalidate_to; ++invalidate_from)
+    for (; invalidate_from != invalidate_to; invalidate_from = (invalidate_from + 1) % size)
     {
-        const auto &edge_data = node_based_graph.GetEdgeData(invalidate_from->eid);
+        auto index = (invalidate_from + road) % size;
+        const auto &edge_data = node_based_graph.GetEdgeData(intersection[index].eid);
         if (!edge_data.roundabout && !edge_data.circular &&
-            node_based_graph.GetTarget(invalidate_from->eid) != from_nid)
+            node_based_graph.GetTarget(intersection[index].eid) != from_nid)
         {
-            invalidate_from->entry_allowed = false;
+            intersection[index].entry_allowed = false;
         }
     }
 }
